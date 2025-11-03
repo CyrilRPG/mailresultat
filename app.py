@@ -44,7 +44,7 @@ def format_note_20(v):
     return f"{n:.2f} / 20"
 
 # =========================
-# TEMPLATE HTML (ACCOLADES ÉCHAPPÉES)
+# TEMPLATE HTML (sans le rond de signature)
 # =========================
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="fr">
@@ -77,7 +77,6 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
 .signature-section {{ text-align: right; }}
 .footer-label {{ font-weight: bold; color: #2c3e50; margin-bottom: 40px; }}
 .signature-line {{ border-top: 2px solid #2c3e50; width: 200px; margin-top: 50px; }}
-.stamp-area {{ height: 80px; border: 2px dashed #bdc3c7; width: 150px; display: inline-block; margin-top: 10px; border-radius: 50%; }}
 .signature-brand {{ margin-top: 15px; font-style: italic; color: #3498db; font-weight: bold; font-size: 16px; }}
 @media print {{ body {{ padding: 0; }} .container {{ border: none; padding: 20px; }} }}
 </style>
@@ -111,7 +110,6 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
     <div class="footer">
         <div class="signature-section">
             <div class="footer-label">La Direction</div>
-            <div class="stamp-area"></div>
             <div class="signature-line"></div>
             <div class="signature-brand">Diploma Santé</div>
         </div>
@@ -125,7 +123,7 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
 # =========================
 LOGICAL_KEYS = {
     "nom": ["nom"],
-    "pseudo": ["prenom", "prénom"],  # 👈 on lit 'Prénom' dans l’Excel
+    "pseudo": ["prenom", "prénom"],  # lit 'Prénom' → affiché comme Pseudo ExoTeach
     "maths": ["note maths", "maths", "mathematiques"],
     "physique": ["note physique", "physique chimie", "physique"],
     "svt": ["note svt", "svt"],
@@ -168,7 +166,7 @@ if uploaded_file:
             with zipfile.ZipFile(buffer, "w") as zipf:
                 for _, row in df.iterrows():
                     nom = row[detected["nom"]]
-                    pseudo = row[detected["pseudo"]]  # colonne "Prénom" → devient "Pseudo ExoTeach"
+                    pseudo = row[detected["pseudo"]]  # 'Prénom' devient 'Pseudo ExoTeach'
                     classe = "1"  # toujours 1
                     maths = format_note_20(row[detected["maths"]])
                     physique = format_note_20(row[detected["physique"]])
