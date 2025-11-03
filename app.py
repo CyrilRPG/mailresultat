@@ -2,10 +2,54 @@ import streamlit as st
 import pandas as pd
 import zipfile
 import io
-import os
+import re
+import unicodedata
 
 # =========================
-# TEMPLATE HTML DE BASE
+# OUTILS
+# =========================
+def normalize(s: str) -> str:
+    """Normalise une clé (enlève accents, met en minuscule, réduit espaces/pontuation)."""
+    if s is None:
+        return ""
+    s = str(s)
+    s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def first_number(text):
+    """Extrait le premier nombre (int/float) trouvé dans une chaîne (ex: '17.36 / 20' -> 17.36)."""
+    if pd.isna(text):
+        return None
+    s = str(text)
+    m = re.search(r"(\d+(?:[.,]\d+)?)", s)
+    if not m:
+        return None
+    num = m.group(1).replace(",", ".")
+    try:
+        return float(num)
+    except:
+        return None
+
+def format_note_20(v):
+    """
+    Formate proprement une note /20 :
+    - Si on trouve un nombre dans le texte, on retourne 'xx.xx / 20'
+    - Sinon, on retourne la chaîne telle quelle (fallback)
+    """
+    if pd.isna(v):
+        return "— / 20"
+    n = first_number(v)
+    if n is None:
+        # si pas de nombre clair, on tente de ne pas dupliquer '/ 20'
+        s = str(v).strip()
+        return s if "/ 20" in s else f"{s} / 20"
+    return f"{n:.2f} / 20"
+
+# =========================
+# TEMPLATE HTML
 # =========================
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="fr">
@@ -68,14 +112,14 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; 
     
     <div class="notes-section">
         <div class="notes-title">RÉSULTATS PAR MATIÈRE</div>
-        <div class="note-item"><span class="matiere">Mathématiques</span><span class="note">{maths} / 20</span></div>
-        <div class="note-item"><span class="matiere">Physique-Chimie</span><span class="note">{physique} / 20</span></div>
-        <div class="note-item"><span class="matiere">Sciences de la Vie et de la Terre (SVT)</span><span class="note">{svt} / 20</span></div>
+        <div class="note-item"><span class="matiere">Mathématiques</span><span class="note">{maths}</span></div>
+        <div class="note-item"><span class="matiere">Physique-Chimie</span><span class="note">{physique}</span></div>
+        <div class="note-item"><span class="matiere">Sciences de la Vie et de la Terre (SVT)</span><span class="note">{svt}</span></div>
     </div>
     
     <div class="moyenne-generale">
         <div class="label">MOYENNE GÉNÉRALE</div>
-        <div class="valeur">{moyenne} / 20</div>
+        <div class="valeur">{moyenne}</div>
     </div>
     
     <div class="footer">
@@ -91,10 +135,37 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; 
 </html>"""
 
 # =========================
+# MAPPAGE DE COLONNES
+# =========================
+# On définit les clés "logiques" que l'on veut récupérer
+LOGICAL_KEYS = {
+    "nom": ["nom"],
+    "prenom": ["prenom", "prénom"],
+    "classe": ["classe"],  # optionnel dans ton fichier
+    "maths": ["note maths", "mathematiques", "mathematique", "note mathematiques", "note mathematique", "maths"],
+    "physique": ["note physique", "physique chimie", "physique", "note physique chimie"],
+    "svt": ["note svt", "svt"],
+    "moyenne": ["moyenne"]
+}
+
+def find_col(col_names, candidates):
+    """Trouve la 1re colonne du DF qui matche l'une des candidates normalisées."""
+    norm_map = {normalize(c): c for c in col_names}
+    for cand in candidates:
+        n = normalize(cand)
+        # correspondance directe
+        if n in norm_map:
+            return norm_map[n]
+        # recherche "contient" (tolérance aux variantes)
+        for k in norm_map.keys():
+            if n in k:
+                return norm_map[k]
+    return None
+
+# =========================
 # APP STREAMLIT
 # =========================
 st.title("📄 Générateur de Relevés HTML - Diploma Santé")
-
 st.write("Cette application génère automatiquement un fichier ZIP contenant un relevé de notes HTML pour chaque élève à partir d’un fichier Excel.")
 
 uploaded_file = st.file_uploader("📂 Importer le fichier Excel (.xlsx)", type=["xlsx"])
@@ -105,26 +176,52 @@ if uploaded_file:
     st.write("Aperçu des données :")
     st.dataframe(df.head())
 
-    # Vérification des colonnes nécessaires
-    colonnes_requises = ["Nom", "Prénom", "Classe", "Mathématiques", "Physique-Chimie", "SVT", "Moyenne"]
-    if all(col in df.columns for col in colonnes_requises):
+    # Détection des colonnes selon le fichier fourni
+    detected = {}
+    for key, variants in LOGICAL_KEYS.items():
+        detected[key] = find_col(df.columns, variants)
+
+    # 'classe' est optionnelle : on met un placeholder si absente
+    missing_required = [k for k in ["nom", "prenom", "maths", "physique", "svt", "moyenne"] if detected.get(k) is None]
+
+    if missing_required:
+        st.error(
+            "❌ Colonnes indispensables manquantes dans l’Excel. "
+            "Vérifie ces libellés (ou leurs variantes) : "
+            f"{', '.join(['Nom', 'Prénom', 'Note Maths', 'Note Physique', 'Note SVT', 'Moyenne'])}\n\n"
+            f"Colonnes trouvées : {', '.join(df.columns.astype(str))}"
+        )
+    else:
         if st.button("🚀 Générer les fichiers HTML et ZIP"):
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as zipf:
                 for _, row in df.iterrows():
-                    html_content = HTML_TEMPLATE.format(
-                        nom=row["Nom"],
-                        prenom=row["Prénom"],
-                        classe=row["Classe"],
-                        maths=row["Mathématiques"],
-                        physique=row["Physique-Chimie"],
-                        svt=row["SVT"],
-                        moyenne=row["Moyenne"]
-                    )
-                    filename = f"{row['Nom']}_{row['Prénom']}.html".replace(" ", "_")
-                    zipf.writestr(filename, html_content)
-            buffer.seek(0)
+                    nom = row[detected["nom"]] if detected["nom"] else ""
+                    prenom = row[detected["prenom"]] if detected["prenom"] else ""
+                    classe = row[detected["classe"]] if detected["classe"] else "—"
 
+                    maths = format_note_20(row[detected["maths"]])
+                    physique = format_note_20(row[detected["physique"]])
+                    svt = format_note_20(row[detected["svt"]])
+                    moyenne = format_note_20(row[detected["moyenne"]])
+
+                    html_content = HTML_TEMPLATE.format(
+                        nom=nom,
+                        prenom=prenom,
+                        classe=classe,
+                        maths=maths,
+                        physique=physique,
+                        svt=svt,
+                        moyenne=moyenne,
+                    )
+
+                    # nom de fichier propre
+                    safe_nom = str(nom).strip().replace(" ", "_")
+                    safe_prenom = str(prenom).strip().replace(" ", "_")
+                    filename = f"{safe_nom}_{safe_prenom}.html"
+                    zipf.writestr(filename, html_content)
+
+            buffer.seek(0)
             st.success("🎉 Génération terminée ! Télécharge ton fichier ZIP ci-dessous.")
             st.download_button(
                 label="⬇️ Télécharger le ZIP",
@@ -132,5 +229,3 @@ if uploaded_file:
                 file_name="releves_diploma_sante.zip",
                 mime="application/zip"
             )
-    else:
-        st.error(f"❌ Le fichier Excel doit contenir les colonnes suivantes : {', '.join(colonnes_requises)}")
