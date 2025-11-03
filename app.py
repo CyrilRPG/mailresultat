@@ -9,6 +9,7 @@ import unicodedata
 # OUTILS
 # =========================
 def normalize(s: str) -> str:
+    """Normalise une clé (retire accents, met en minuscule, remplace ponctuation/espaces)."""
     if s is None:
         return ""
     s = str(s)
@@ -19,6 +20,7 @@ def normalize(s: str) -> str:
     return s
 
 def first_number(text):
+    """Extrait le premier nombre (int/float) trouvé dans une chaîne."""
     if pd.isna(text):
         return None
     s = str(text)
@@ -32,6 +34,7 @@ def first_number(text):
         return None
 
 def format_note_20(v):
+    """Formate une note sous la forme 'xx.xx / 20' quand possible."""
     if pd.isna(v):
         return "— / 20"
     n = first_number(v)
@@ -89,7 +92,7 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
     
     <div class="info-section">
         <div class="info-row"><span class="info-label">Nom :</span><span class="info-value">{nom}</span></div>
-        <div class="info-row"><span class="info-label">Prénom :</span><span class="info-value">{prenom}</span></div>
+        <div class="info-row"><span class="info-label">Pseudo ExoTeach :</span><span class="info-value">{pseudo}</span></div>
         <div class="info-row"><span class="info-label">Classe :</span><span class="info-value">{classe}</span></div>
     </div>
     
@@ -120,22 +123,29 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
 # =========================
 # MAPPAGE AUTOMATIQUE DES COLONNES
 # =========================
+# On exige désormais: Nom, Pseudo ExoTeach (ou variantes), Note Maths, Note Physique, Note SVT, Moyenne
 LOGICAL_KEYS = {
     "nom": ["nom"],
-    "prenom": ["prenom", "prénom"],
-    "classe": ["classe"],
-    "maths": ["note maths", "mathematiques", "maths"],
-    "physique": ["note physique", "physique chimie", "physique"],
+    # Toutes les variantes acceptées pour la colonne Pseudo ExoTeach
+    "pseudo": [
+        "pseudo exoteach", "pseudo exo teach", "pseudo_exoteach",
+        "pseudo", "identifiant", "username", "user", "login"
+    ],
+    "maths": ["note maths", "mathematiques", "maths", "note mathematiques", "note mathematique"],
+    "physique": ["note physique", "physique chimie", "note physique chimie", "physique"],
     "svt": ["note svt", "svt"],
     "moyenne": ["moyenne"]
 }
 
 def find_col(col_names, candidates):
+    """Trouve la 1re colonne du DF qui matche l'une des candidates normalisées."""
     norm_map = {normalize(c): c for c in col_names}
     for cand in candidates:
         n = normalize(cand)
+        # correspondance directe
         if n in norm_map:
             return norm_map[n]
+        # recherche "contient" (tolérance aux variantes)
         for k in norm_map.keys():
             if n in k:
                 return norm_map[k]
@@ -145,36 +155,73 @@ def find_col(col_names, candidates):
 # APP STREAMLIT
 # =========================
 st.title("📄 Générateur de Relevés HTML - Diploma Santé")
+st.write("Cette application génère automatiquement un fichier ZIP contenant un relevé de notes HTML pour chaque élève à partir d’un fichier Excel.")
 
 uploaded_file = st.file_uploader("📂 Importer le fichier Excel (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
     st.success(f"✅ Fichier chargé : {uploaded_file.name}")
+    st.write("Aperçu des données :")
     st.dataframe(df.head())
 
+    # Détection des colonnes selon le fichier fourni
     detected = {k: find_col(df.columns, v) for k, v in LOGICAL_KEYS.items()}
-    missing = [k for k in ["nom", "prenom", "maths", "physique", "svt", "moyenne"] if detected.get(k) is None]
 
-    if missing:
-        st.error(f"❌ Colonnes manquantes : {', '.join(missing)}")
-        st.write(f"Colonnes disponibles : {', '.join(df.columns.astype(str))}")
+    # Colonnes indispensables maintenant que "Prénom" n'est plus utilisé
+    missing_required = [k for k in ["nom", "pseudo", "maths", "physique", "svt", "moyenne"] if detected.get(k) is None]
+
+    if missing_required:
+        human_names = {
+            "nom": "Nom",
+            "pseudo": "Pseudo ExoTeach",
+            "maths": "Note Maths",
+            "physique": "Note Physique",
+            "svt": "Note SVT",
+            "moyenne": "Moyenne",
+        }
+        st.error(
+            "❌ Colonnes indispensables manquantes dans l’Excel.\n\n"
+            "Vérifie la présence (ou des variantes raisonnables) de : "
+            + ", ".join(human_names[k] for k in missing_required)
+        )
+        st.caption("Colonnes détectées : " + ", ".join(df.columns.astype(str)))
     else:
-        if st.button("🚀 Générer les relevés"):
+        if st.button("🚀 Générer les fichiers HTML et ZIP"):
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as zipf:
                 for _, row in df.iterrows():
-                    html = HTML_TEMPLATE.format(
-                        nom=row[detected["nom"]],
-                        prenom=row[detected["prenom"]],
-                        classe=row[detected["classe"]] if detected["classe"] else "—",
-                        maths=format_note_20(row[detected["maths"]]),
-                        physique=format_note_20(row[detected["physique"]]),
-                        svt=format_note_20(row[detected["svt"]]),
-                        moyenne=format_note_20(row[detected["moyenne"]]),
+                    nom = row[detected["nom"]]
+                    pseudo = row[detected["pseudo"]]
+                    # Classe forcée à "1"
+                    classe = "1"
+
+                    maths = format_note_20(row[detected["maths"]])
+                    physique = format_note_20(row[detected["physique"]])
+                    svt = format_note_20(row[detected["svt"]])
+                    moyenne = format_note_20(row[detected["moyenne"]])
+
+                    html_content = HTML_TEMPLATE.format(
+                        nom=nom,
+                        pseudo=pseudo,
+                        classe=classe,
+                        maths=maths,
+                        physique=physique,
+                        svt=svt,
+                        moyenne=moyenne,
                     )
-                    fname = f"{row[detected['nom']]}_{row[detected['prenom']]}.html".replace(" ", "_")
-                    zipf.writestr(fname, html)
+
+                    # nom de fichier propre
+                    safe_nom = str(nom).strip().replace(" ", "_")
+                    safe_pseudo = str(pseudo).strip().replace(" ", "_")
+                    filename = f"{safe_nom}_{safe_pseudo}.html"
+                    zipf.writestr(filename, html_content)
+
             buffer.seek(0)
-            st.success("✅ Relevés générés avec succès !")
-            st.download_button("⬇️ Télécharger le ZIP", buffer, "releves.zip", "application/zip")
+            st.success("🎉 Génération terminée ! Télécharge ton fichier ZIP ci-dessous.")
+            st.download_button(
+                label="⬇️ Télécharger le ZIP",
+                data=buffer,
+                file_name="releves_diploma_sante.zip",
+                mime="application/zip"
+            )
