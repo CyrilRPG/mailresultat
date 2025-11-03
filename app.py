@@ -123,29 +123,21 @@ body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0;
 # =========================
 # MAPPAGE AUTOMATIQUE DES COLONNES
 # =========================
-# On exige désormais: Nom, Pseudo ExoTeach (ou variantes), Note Maths, Note Physique, Note SVT, Moyenne
 LOGICAL_KEYS = {
     "nom": ["nom"],
-    # Toutes les variantes acceptées pour la colonne Pseudo ExoTeach
-    "pseudo": [
-        "pseudo exoteach", "pseudo exo teach", "pseudo_exoteach",
-        "pseudo", "identifiant", "username", "user", "login"
-    ],
-    "maths": ["note maths", "mathematiques", "maths", "note mathematiques", "note mathematique"],
-    "physique": ["note physique", "physique chimie", "note physique chimie", "physique"],
+    "pseudo": ["prenom", "prénom"],  # 👈 on lit 'Prénom' dans l’Excel
+    "maths": ["note maths", "maths", "mathematiques"],
+    "physique": ["note physique", "physique chimie", "physique"],
     "svt": ["note svt", "svt"],
-    "moyenne": ["moyenne"]
+    "moyenne": ["moyenne"],
 }
 
 def find_col(col_names, candidates):
-    """Trouve la 1re colonne du DF qui matche l'une des candidates normalisées."""
     norm_map = {normalize(c): c for c in col_names}
     for cand in candidates:
         n = normalize(cand)
-        # correspondance directe
         if n in norm_map:
             return norm_map[n]
-        # recherche "contient" (tolérance aux variantes)
         for k in norm_map.keys():
             if n in k:
                 return norm_map[k]
@@ -155,47 +147,29 @@ def find_col(col_names, candidates):
 # APP STREAMLIT
 # =========================
 st.title("📄 Générateur de Relevés HTML - Diploma Santé")
-st.write("Cette application génère automatiquement un fichier ZIP contenant un relevé de notes HTML pour chaque élève à partir d’un fichier Excel.")
+st.write("Cette application génère automatiquement un fichier ZIP contenant un relevé HTML pour chaque élève.")
 
 uploaded_file = st.file_uploader("📂 Importer le fichier Excel (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
     st.success(f"✅ Fichier chargé : {uploaded_file.name}")
-    st.write("Aperçu des données :")
     st.dataframe(df.head())
 
-    # Détection des colonnes selon le fichier fourni
     detected = {k: find_col(df.columns, v) for k, v in LOGICAL_KEYS.items()}
+    missing = [k for k in ["nom", "pseudo", "maths", "physique", "svt", "moyenne"] if detected.get(k) is None]
 
-    # Colonnes indispensables maintenant que "Prénom" n'est plus utilisé
-    missing_required = [k for k in ["nom", "pseudo", "maths", "physique", "svt", "moyenne"] if detected.get(k) is None]
-
-    if missing_required:
-        human_names = {
-            "nom": "Nom",
-            "pseudo": "Pseudo ExoTeach",
-            "maths": "Note Maths",
-            "physique": "Note Physique",
-            "svt": "Note SVT",
-            "moyenne": "Moyenne",
-        }
-        st.error(
-            "❌ Colonnes indispensables manquantes dans l’Excel.\n\n"
-            "Vérifie la présence (ou des variantes raisonnables) de : "
-            + ", ".join(human_names[k] for k in missing_required)
-        )
-        st.caption("Colonnes détectées : " + ", ".join(df.columns.astype(str)))
+    if missing:
+        st.error(f"❌ Colonnes manquantes dans l’Excel : {', '.join(missing)}")
+        st.caption(f"Colonnes détectées : {', '.join(df.columns.astype(str))}")
     else:
-        if st.button("🚀 Générer les fichiers HTML et ZIP"):
+        if st.button("🚀 Générer les relevés HTML"):
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as zipf:
                 for _, row in df.iterrows():
                     nom = row[detected["nom"]]
-                    pseudo = row[detected["pseudo"]]
-                    # Classe forcée à "1"
-                    classe = "1"
-
+                    pseudo = row[detected["pseudo"]]  # colonne "Prénom" → devient "Pseudo ExoTeach"
+                    classe = "1"  # toujours 1
                     maths = format_note_20(row[detected["maths"]])
                     physique = format_note_20(row[detected["physique"]])
                     svt = format_note_20(row[detected["svt"]])
@@ -211,14 +185,13 @@ if uploaded_file:
                         moyenne=moyenne,
                     )
 
-                    # nom de fichier propre
                     safe_nom = str(nom).strip().replace(" ", "_")
                     safe_pseudo = str(pseudo).strip().replace(" ", "_")
                     filename = f"{safe_nom}_{safe_pseudo}.html"
                     zipf.writestr(filename, html_content)
 
             buffer.seek(0)
-            st.success("🎉 Génération terminée ! Télécharge ton fichier ZIP ci-dessous.")
+            st.success("🎉 Relevés générés avec succès !")
             st.download_button(
                 label="⬇️ Télécharger le ZIP",
                 data=buffer,
